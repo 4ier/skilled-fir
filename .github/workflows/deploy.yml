@@ -11,6 +11,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      VITE_SUPABASE_URL: ${{ secrets.SUPABASE_PROJ_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_PORJ_KEY }}
 
     steps:
       - name: Checkout
