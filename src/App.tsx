@@ -54,7 +54,13 @@ interface SnapshotPayload {
     host: PlayerSnapshot
     guest?: PlayerSnapshot
   }
+  spectators: Spectator[]
   game: GameState
+}
+
+interface Spectator {
+  id: string
+  name: string
 }
 
 const BOARD_SIZE = 15
@@ -475,6 +481,8 @@ function App() {
   const [hostPlayer, setHostPlayer] = useState<PlayerMeta | null>(null)
   const [guestPlayer, setGuestPlayer] = useState<PlayerMeta | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [spectators, setSpectators] = useState<Spectator[]>([])
+  const [localSpectatorName, setLocalSpectatorName] = useState<string | null>(null)
 
   const channelRef = useRef<RealtimeChannel | null>(null)
   const gameStateRef = useRef(gameState)
@@ -482,6 +490,7 @@ function App() {
   const roomCodeRef = useRef(roomCode)
   const hostPlayerRef = useRef(hostPlayer)
   const guestPlayerRef = useRef(guestPlayer)
+  const spectatorsRef = useRef<Spectator[]>(spectators)
 
   useEffect(() => {
     gameStateRef.current = gameState
@@ -502,6 +511,19 @@ function App() {
   useEffect(() => {
     guestPlayerRef.current = guestPlayer
   }, [guestPlayer])
+
+  useEffect(() => {
+    spectatorsRef.current = spectators
+  }, [spectators])
+
+  useEffect(() => {
+    if (!session?.user.id) {
+      setLocalSpectatorName(null)
+      return
+    }
+    const found = spectators.find((spectator) => spectator.id === session.user.id)
+    setLocalSpectatorName(found ? found.name : null)
+  }, [spectators, session])
 
   const localPlayer = useMemo(() => {
     const userId = session?.user.id
@@ -572,6 +594,7 @@ function App() {
       host?: PlayerMeta | null
       guest?: PlayerMeta | null
       status?: RoomStatus
+      spectators?: Spectator[]
     },
   ) => {
     const channel = channelRef.current
@@ -590,6 +613,7 @@ function App() {
         host: playerSnapshot(host)!,
         guest: playerSnapshot(overrides?.guest ?? guestPlayerRef.current),
       },
+      spectators: overrides?.spectators ?? spectatorsRef.current,
       game: overrides?.game ?? gameStateRef.current,
     }
 
@@ -605,6 +629,7 @@ function App() {
         ? snapshotToPlayerMeta(payload.players.guest, 'guest')
         : null,
     )
+    setSpectators(payload.spectators ?? [])
     setGameState(payload.game)
   }
 
@@ -614,27 +639,54 @@ function App() {
     const host = hostPlayerRef.current
     if (!host) return
 
-    const updatedHost: PlayerMeta = { ...host, ready: false }
-    const assignedColor: Player = host.color === 'black' ? 'white' : 'black'
-    const guest: PlayerMeta = {
-      id: payload.playerId,
-      name: payload.name,
-      color: assignedColor,
-      role: 'guest',
-      ready: false,
+    const currentGuest = guestPlayerRef.current
+    const existingSpectator = spectatorsRef.current.find(
+      (spectator) => spectator.id === payload.playerId,
+    )
+    if (currentGuest && currentGuest.id !== payload.playerId) {
+      const nextSpectators = existingSpectator
+        ? spectatorsRef.current.map((spectator) =>
+            spectator.id === payload.playerId
+              ? { ...spectator, name: payload.name }
+              : spectator,
+          )
+        : [...spectatorsRef.current, { id: payload.playerId, name: payload.name }]
+
+      setSpectators(nextSpectators)
+      broadcastSnapshot({ spectators: nextSpectators })
+      return
     }
 
+    const updatedHost: PlayerMeta = { ...host, ready: false }
+    const assignedColor: Player = host.color === 'black' ? 'white' : 'black'
+    const guest: PlayerMeta =
+      currentGuest && currentGuest.id === payload.playerId
+        ? { ...currentGuest, name: payload.name, ready: false }
+        : {
+            id: payload.playerId,
+            name: payload.name,
+            color: assignedColor,
+            role: 'guest',
+            ready: false,
+          }
+
     const nextGame = freshGameState(undefined, `${host.name} 等待 ${guest.name} 加入战局。`)
+    const updatedSpectators = spectatorsRef.current.filter(
+      (spectator) => spectator.id !== payload.playerId,
+    )
+
     setHostPlayer(updatedHost)
     setGuestPlayer(guest)
     setRoomStatus('lobby')
     setGameState(nextGame)
+    setSpectators(updatedSpectators)
 
     broadcastSnapshot({
       host: updatedHost,
       guest,
       status: 'lobby',
       game: nextGame,
+      spectators: updatedSpectators,
     })
   }
 
@@ -715,6 +767,8 @@ function App() {
     setRoomStatus('lobby')
     setGameState(freshGameState(undefined, intro))
     setErrorMessage(null)
+    setSpectators([])
+    setLocalSpectatorName(null)
 
     await subscribeToRoom(code, 'host', hostMeta)
 
@@ -733,15 +787,7 @@ function App() {
     }
 
     const name = randomFunnyName([hostPlayerRef.current?.name ?? ''])
-    const guestMeta: PlayerMeta = {
-      id: session.user.id,
-      name,
-      color: 'white',
-      role: 'guest',
-      ready: false,
-    }
-
-    setGuestPlayer(guestMeta)
+    setLocalSpectatorName(name)
     setRoomCode(trimmed)
     setRoomStatus('lobby')
     setGameState((prev) => ({
@@ -749,8 +795,17 @@ function App() {
       statusMessage: `正在尝试加入房间 ${trimmed} ……`,
     }))
     setErrorMessage(null)
+    setSpectators([])
 
-    await subscribeToRoom(trimmed, 'guest', guestMeta)
+    const pseudoPlayer: PlayerMeta = {
+      id: session.user.id,
+      name,
+      color: 'white',
+      role: 'guest',
+      ready: false,
+    }
+
+    await subscribeToRoom(trimmed, 'guest', pseudoPlayer)
 
     const url = new URL(window.location.href)
     url.searchParams.set('code', trimmed)
@@ -912,7 +967,6 @@ function App() {
 
   const canReset = roomStatus === 'finished'
   const readyDisabled = !localPlayer || roomStatus !== 'lobby'
-
   const spotlightText = useMemo(() => {
     if (roomStatus === 'lobby') {
       const waitingName = hostPlayer?.ready
@@ -1109,22 +1163,42 @@ function App() {
                 </div>
                 <div className="score-value">{gameState.scores.white}</div>
               </div>
-              <button
-                type="button"
-                className="ready-button"
-                onClick={toggleReady}
-                disabled={readyDisabled}
-              >
-                {localPlayer?.ready ? '取消就绪' : '我已就绪'}
-              </button>
-              {opponent ? (
-                <div className="ready-status">
-                  对手状态：{opponent.ready ? '已就绪' : '待就绪'}
-                </div>
+              {localPlayer ? (
+                <>
+                  <button
+                    type="button"
+                    className="ready-button"
+                    onClick={toggleReady}
+                    disabled={readyDisabled}
+                  >
+                    {localPlayer.ready ? '取消就绪' : '我已就绪'}
+                  </button>
+                  {opponent ? (
+                    <div className="ready-status">
+                      对手状态：{opponent.ready ? '已就绪' : '待就绪'}
+                    </div>
+                  ) : (
+                    <div className="ready-status">等待对手加入…</div>
+                  )}
+                </>
               ) : (
-                <div className="ready-status">等待对手加入…</div>
+                <div className="ready-status">
+                  {localSpectatorName
+                    ? `${localSpectatorName} 正在旁观，享受这场综艺对局吧！`
+                    : '旁观模式，可随时围观阵容。'}
+                </div>
               )}
             </div>
+            {spectators.length > 0 && (
+              <div className="spectator-card">
+                <h2>观众席</h2>
+                <ul className="spectator-list">
+                  {spectators.map((spectator) => (
+                    <li key={spectator.id}>{spectator.name}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div className="info-card">
               <h2>玩法速记</h2>
               <ul className="info-list">
