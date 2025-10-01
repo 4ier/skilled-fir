@@ -64,6 +64,7 @@ interface Spectator {
 }
 
 const BOARD_SIZE = 15
+const TURN_DURATION_SECONDS = 30
 
 const PLAYER_META: Record<
   Player,
@@ -200,6 +201,11 @@ function isBoardFull(board: CellState[][]): boolean {
 
 function keyFor(row: number, col: number) {
   return `${row}-${col}`
+}
+
+function formatPosition(row: number, col: number) {
+  const columnCharCode = 'A'.charCodeAt(0) + col
+  return `${String.fromCharCode(columnCharCode)}${row + 1}`
 }
 
 function freshGameState(previous?: GameState, statusMessage?: string): GameState {
@@ -483,6 +489,7 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [spectators, setSpectators] = useState<Spectator[]>([])
   const [localSpectatorName, setLocalSpectatorName] = useState<string | null>(null)
+  const [turnCountdown, setTurnCountdown] = useState(TURN_DURATION_SECONDS)
 
   const channelRef = useRef<RealtimeChannel | null>(null)
   const gameStateRef = useRef(gameState)
@@ -540,6 +547,33 @@ function App() {
     if (guestPlayer?.id === userId) return hostPlayer
     return null
   }, [session, hostPlayer, guestPlayer])
+
+  useEffect(() => {
+    let countdownTimer: ReturnType<typeof setInterval> | undefined
+
+    if (roomStatus === 'playing' && gameState.status === 'playing') {
+      setTurnCountdown(TURN_DURATION_SECONDS)
+      countdownTimer = setInterval(() => {
+        setTurnCountdown((prev) => {
+          if (prev <= 1) {
+            if (countdownTimer) {
+              clearInterval(countdownTimer)
+            }
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+    } else {
+      setTurnCountdown(TURN_DURATION_SECONDS)
+    }
+
+    return () => {
+      if (countdownTimer) {
+        clearInterval(countdownTimer)
+      }
+    }
+  }, [roomStatus, gameState.status, gameState.currentPlayer])
 
   useEffect(() => {
     let mounted = true
@@ -967,6 +1001,40 @@ function App() {
 
   const canReset = roomStatus === 'finished'
   const readyDisabled = !localPlayer || roomStatus !== 'lobby'
+  const lastMove =
+    gameState.history.length > 0
+      ? gameState.history[gameState.history.length - 1]
+      : null
+  const countdownActive = roomStatus === 'playing' && gameState.status === 'playing'
+  const readyButtonLabel = roomStatus === 'lobby'
+    ? localPlayer?.ready
+      ? '取消就绪'
+      : '我已就绪'
+    : roomStatus === 'playing'
+      ? '对局进行中'
+      : '等待开局'
+  const lastMoveDescription = lastMove
+    ? `${getPlayerNameByColor(lastMove.player)} · ${formatPosition(lastMove.row, lastMove.col)}`
+    : '暂无落子'
+  const timerStateClass = !countdownActive
+    ? ''
+    : turnCountdown <= 5
+      ? 'timer-critical'
+      : turnCountdown <= 10
+        ? 'timer-warning'
+        : ''
+  const opponentStatusText = opponent
+    ? `对手：${opponent.ready ? '已就绪' : '待就绪'}`
+    : '对手：待加入'
+  const opponentHudStatus = opponent
+    ? `对手：${opponent.ready ? '已就绪' : '待就绪'}`
+    : '等待对手加入…'
+  const opponentReady = opponent?.ready ?? false
+  const selfReadyText = roomStatus === 'playing'
+    ? '对局中'
+    : localPlayer?.ready
+      ? '已就绪'
+      : '待就绪'
   const spotlightText = useMemo(() => {
     if (roomStatus === 'lobby') {
       const waitingName = hostPlayer?.ready
@@ -1057,6 +1125,57 @@ function App() {
       {roomStatus !== 'idle' && (
         <main className="layout">
           <section className="board-section">
+            <div className="board-hud">
+              <div
+                className="turn-card"
+                style={{ borderColor: PLAYER_META[gameState.currentPlayer].accent }}
+              >
+                <div className="turn-heading">当前手</div>
+                <div
+                  className="turn-player"
+                  style={{ color: PLAYER_META[gameState.currentPlayer].accent }}
+                >
+                  <span className={`player-dot ${gameState.currentPlayer}`} />
+                  {getPlayerNameByColor(gameState.currentPlayer)}
+                </div>
+                <p className="turn-slogan">
+                  {PLAYER_META[gameState.currentPlayer].slogan}
+                </p>
+              </div>
+              <div className="hud-middle">
+                <div className={`hud-timer ${timerStateClass}`}>
+                  <span className="hud-timer-label">倒计时</span>
+                  <span className="hud-timer-value">
+                    {countdownActive ? `${turnCountdown}s` : '待开局'}
+                  </span>
+                </div>
+                <div className="hud-last-move">
+                  <span className="hud-last-move-label">上一步</span>
+                  <span className="hud-last-move-value">{lastMoveDescription}</span>
+                </div>
+              </div>
+              <div className="hud-actions">
+                {localPlayer ? (
+                  <>
+                    <button
+                      type="button"
+                      className="ready-button hud-ready-button"
+                      onClick={toggleReady}
+                      disabled={readyDisabled}
+                    >
+                      {readyButtonLabel}
+                    </button>
+                    <div className="hud-ready-status">{opponentHudStatus}</div>
+                  </>
+                ) : (
+                  <div className="hud-ready-status">
+                    {localSpectatorName
+                      ? `${localSpectatorName} 正在旁观，享受这场综艺对局吧！`
+                      : '旁观模式，可随时围观阵容。'}
+                  </div>
+                )}
+              </div>
+            </div>
             <div
               className={`board ${gameState.pendingSkill === 'sandstorm' ? 'board-targeting' : ''}`}
             >
@@ -1065,10 +1184,24 @@ function App() {
                   <button
                     key={keyFor(rowIndex, colIndex)}
                     type="button"
-                    className={`board-cell ${cell ? `occupied ${cell}` : ''}`}
+                    className={`board-cell ${
+                      cell ? `occupied ${cell}` : ''
+                    } ${
+                      lastMove && rowIndex === lastMove.row && colIndex === lastMove.col
+                        ? 'last-move'
+                        : ''
+                    }`}
                     onClick={() => handleCellClick(rowIndex, colIndex)}
                   >
-                    {cell && <span className={`stone ${cell}`} />}
+                    {cell && (
+                      <span
+                        className={`stone ${cell} ${
+                          lastMove && rowIndex === lastMove.row && colIndex === lastMove.col
+                            ? 'stone-last-move'
+                            : ''
+                        }`}
+                      />
+                    )}
                   </button>
                 )),
               )}
@@ -1164,25 +1297,24 @@ function App() {
                 <div className="score-value">{gameState.scores.white}</div>
               </div>
               {localPlayer ? (
-                <>
-                  <button
-                    type="button"
-                    className="ready-button"
-                    onClick={toggleReady}
-                    disabled={readyDisabled}
+                <div className="ready-overview">
+                  <span
+                    className={`ready-chip ${
+                      selfReadyText === '已就绪' || roomStatus === 'playing'
+                        ? 'ready'
+                        : 'waiting'
+                    }`}
                   >
-                    {localPlayer.ready ? '取消就绪' : '我已就绪'}
-                  </button>
-                  {opponent ? (
-                    <div className="ready-status">
-                      对手状态：{opponent.ready ? '已就绪' : '待就绪'}
-                    </div>
-                  ) : (
-                    <div className="ready-status">等待对手加入…</div>
-                  )}
-                </>
+                    我方：{selfReadyText}
+                  </span>
+                  <span
+                    className={`ready-chip ${opponentReady ? 'ready' : 'waiting'}`}
+                  >
+                    {opponentStatusText}
+                  </span>
+                </div>
               ) : (
-                <div className="ready-status">
+                <div className="ready-status ready-status-compact">
                   {localSpectatorName
                     ? `${localSpectatorName} 正在旁观，享受这场综艺对局吧！`
                     : '旁观模式，可随时围观阵容。'}
