@@ -40,7 +40,7 @@
 
 7. **环境变量配置**
    - `.env.example` 列出 `VITE_SUPABASE_URL` 与 `VITE_SUPABASE_ANON_KEY`。
-   - GitHub Pages workflow 读取环境变量 `SUPABASE_PROJ_URL` / `SUPABASE_PORJ_KEY` 注入到构建环境。
+   - GitHub Pages workflow 从仓库 Secrets `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` 注入构建环境。
 
 8. **成本控制**
    - Supabase Realtime 免费额度足够小规模使用；若并发增大，可升级套餐或迁移至自建 realtime-server。

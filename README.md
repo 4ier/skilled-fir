@@ -25,7 +25,7 @@ VITE_SUPABASE_URL=你的 Supabase 项目 URL
 VITE_SUPABASE_ANON_KEY=Supabase anon 公钥
 ```
 
-本仓库的 GitHub Pages workflow 会自动从环境变量 `SUPABASE_PROJ_URL` 与 `SUPABASE_PORJ_KEY` 注入上述值，若需本地运行可复制 `.env.example`（自行创建）并填入相同键名。
+本仓库的 GitHub Pages workflow 会自动从仓库 Secrets `VITE_SUPABASE_URL` 与 `VITE_SUPABASE_ANON_KEY` 注入上述值；若需本地运行可复制 `.env.example` 并填入相同键名。
 
 ```bash
 npm install
@@ -54,7 +54,7 @@ npm run build   # 产出 dist/ 静态资源
 
 1. 在仓库 Settings → Pages 选择 `gh-pages` 分支。
 2. 确保 `Actions` 标签页的 `Deploy static site` 工作流拥有写入权限（`contents: write`），或根据需要调整。
-3. 在仓库 secrets/variables 中配置 `SUPABASE_PROJ_URL` 与 `SUPABASE_PORJ_KEY`，或直接在 workflow 中改为你自己的变量名。
+3. 在仓库 Secrets 中配置 `VITE_SUPABASE_URL` 与 `VITE_SUPABASE_ANON_KEY`，或根据需要修改 workflow 里的变量名。
 4. 更新 `vite.config.ts` 中的 `base` 值为你的仓库名，例如 `/your-repo/`。
 
 ## 在线对战引导
